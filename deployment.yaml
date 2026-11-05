@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openshift-ci-final
+  labels:
+    app: openshift-ci-final
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openshift-ci-final
+  template:
+    metadata:
+      labels:
+        app: openshift-ci-final
+    spec:
+      containers:
+        - name: app
+          image: image-registry.openshift-image-registry.svc:5000/openshift-ci-final/openshift-ci-final:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openshift-ci-final
+spec:
+  selector:
+    app: openshift-ci-final
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: openshift-ci-final
+spec:
+  to:
+    kind: Service
+    name: openshift-ci-final
+  port:
+    targetPort: http
+  tls:
+    termination: edge
