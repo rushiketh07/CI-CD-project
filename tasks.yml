@@ -1,0 +1,114 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: fetch-repository
+spec:
+  params:
+    - name: url
+      type: string
+    - name: revision
+      type: string
+      default: main
+  workspaces:
+    - name: source
+  steps:
+    - name: clone
+      image: alpine/git:v2.45.2
+      script: |
+        #!/bin/sh
+        set -eu
+        find "$(workspaces.source.path)" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        git clone --depth 1 --branch "$(params.revision)" "$(params.url)" "$(workspaces.source.path)"
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cleanup
+spec:
+  workspaces:
+    - name: source
+  steps:
+    - name: clear-previous-build-artifacts
+      image: alpine:3.20
+      script: |
+        #!/bin/sh
+        set -eu
+        rm -rf "$(workspaces.source.path)/.build" "$(workspaces.source.path)/coverage"
+        mkdir -p "$(workspaces.source.path)/.build"
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: lint
+spec:
+  workspaces:
+    - name: source
+  steps:
+    - name: flake8
+      image: python:3.12-slim
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        python -m pip install --no-cache-dir -r requirements.txt
+        python -m flake8 app.py test_app.py
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: test
+spec:
+  workspaces:
+    - name: source
+  steps:
+    - name: nosetests
+      image: python:3.12-slim
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        python -m pip install --no-cache-dir -r requirements.txt
+        nosetests --with-coverage --cover-package=app --cover-min-percentage=100
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: build-image
+spec:
+  params:
+    - name: image-url
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: build-and-push
+      image: quay.io/buildah/stable:v1.35.4
+      workingDir: $(workspaces.source.path)
+      securityContext:
+        privileged: true
+      script: |
+        #!/bin/sh
+        set -eu
+        buildah bud --format docker -t "$(params.image-url)" .
+        buildah push "$(params.image-url)" "docker://$(params.image-url)"
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: deploy
+spec:
+  params:
+    - name: image-url
+      type: string
+  workspaces:
+    - name: source
+  steps:
+    - name: rollout
+      image: registry.redhat.io/openshift4/ose-cli:v4.16
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        oc apply -f deployment.yaml
+        oc set image deployment/openshift-ci-final app="$(params.image-url)"
+        oc rollout status deployment/openshift-ci-final --timeout=180s
