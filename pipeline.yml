@@ -1,0 +1,86 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: oc-pipelines-oc-final
+spec:
+  workspaces:
+    - name: pipeline-workspace
+  params:
+    - name: git-url
+      type: string
+      description: The Git repository URL
+      default: "https://github.com/rushiketh07/ci-cd-final-project.git"
+    - name: git-revision
+      type: string
+      description: The Git branch or revision to build
+      default: "main"
+    - name: image-name
+      type: string
+      description: Target container image registry destination
+      default: "image-registry.openshift-image-registry.svc:5000/sn-labs-rushiketh07/accounts:latest"
+  tasks:
+    - name: fetch-repository
+      taskRef:
+        name: git-clone
+        kind: ClusterTask
+      workspaces:
+        - name: output
+          workspace: pipeline-workspace
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    - name: cleanup
+      taskRef:
+        name: cleanup
+      runAfter:
+        - fetch-repository
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+
+    - name: lint
+      taskRef:
+        name: flake8
+      runAfter:
+        - cleanup
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+
+    - name: test
+      taskRef:
+        name: nosetests
+      runAfter:
+        - lint
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+
+    - name: build-image
+      taskRef:
+        name: buildah
+        kind: ClusterTask
+      runAfter:
+        - test
+      workspaces:
+        - name: source
+          workspace: pipeline-workspace
+      params:
+        - name: IMAGE
+          value: $(params.image-name)
+
+    - name: deploy
+      taskRef:
+        name: openshift-client
+        kind: ClusterTask
+      runAfter:
+        - build-image
+      params:
+        - name: SCRIPT
+          value: |
+            oc rollout restart deployment/accounts -n sn-labs-rushiketh07
+            oc rollout status deployment/accounts -n sn-labs-rushiketh07 --timeout=120s
+

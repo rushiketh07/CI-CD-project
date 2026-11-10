@@ -1,0 +1,102 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: cleanup
+spec:
+  description: Clears the workspace directory and removes leftover build artifacts from previous runs
+  workspaces:
+    - name: source
+      description: The workspace to clean up before new build executions
+  steps:
+    - name: clean-workspace
+      image: alpine:3.18
+      workingDir: $(workspaces.source.path)
+      securityContext:
+        runAsUser: 0
+      script: |
+        #!/usr/bin/env sh
+        set -eu
+        echo "=========================================="
+        echo "Starting Workspace Directory Cleanup Task"
+        echo "Target Directory: $(workspaces.source.path)"
+        echo "=========================================="
+        if [ -d "$(workspaces.source.path)" ]; then
+          echo "Scanning for previous build artifacts and temporary files..."
+          rm -rf "$(workspaces.source.path)"/*
+          rm -rf "$(workspaces.source.path)"/.[!.]*
+          echo "Cleanup completed successfully: Workspace is pristine."
+        else
+          echo "Target workspace directory does not exist yet. Creating clean directory..."
+          mkdir -p "$(workspaces.source.path)"
+        fi
+        ls -la "$(workspaces.source.path)"
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: flake8
+spec:
+  description: Runs flake8 static code analysis and linting against Python codebase
+  workspaces:
+    - name: source
+      description: The workspace holding source code to lint
+  params:
+    - name: image
+      type: string
+      description: Python container image to run linter
+      default: "python:3.9-slim"
+    - name: args
+      type: array
+      description: Flake8 arguments
+      default: ["--count", "--max-complexity=10", "--max-line-length=127", "--statistics"]
+  steps:
+    - name: lint
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        echo "=========================================="
+        echo "Running Flake8 Static Analysis and Linting"
+        echo "=========================================="
+        pip install --no-cache-dir flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . $(params.args)
+        echo "Lint check completed: 0 errors detected."
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: nosetests
+spec:
+  description: Executes Python automated unit test suite with coverage report via nosetests
+  workspaces:
+    - name: source
+      description: The workspace holding source code and tests
+  params:
+    - name: image
+      type: string
+      description: Python container image to run test suite
+      default: "python:3.9-slim"
+    - name: args
+      type: array
+      description: Arguments passed directly to nosetests runner
+      default: ["-v", "--with-spec", "--spec-color", "--with-coverage", "--cover-package=service"]
+  steps:
+    - name: run-tests
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/usr/bin/env sh
+        set -e
+        echo "=========================================="
+        echo "Running Automated Unit Tests with Coverage"
+        echo "=========================================="
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then
+          pip install --no-cache-dir -r requirements.txt
+        fi
+        pip install --no-cache-dir nose coverage
+        nosetests $(params.args)
+        echo "All unit tests completed successfully with 100% pass rate."
+
